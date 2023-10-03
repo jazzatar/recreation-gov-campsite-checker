@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 from collections import defaultdict
+import pickle
 from datetime import datetime, timedelta
 from itertools import count, groupby
 
@@ -23,6 +24,13 @@ log_formatter = logging.Formatter(
 sh = logging.StreamHandler()
 sh.setFormatter(log_formatter)
 LOG.addHandler(sh)
+
+BASE_URL = "https://www.recreation.gov"
+WEB_PREFIX = "/camping/campgrounds/"
+
+INPUT_DATE_FORMAT = "%Y-%m-%d"
+ISO_DATE_FORMAT_REQUEST = "%Y-%m-%dT00:00:00.000Z"
+ISO_DATE_FORMAT_RESPONSE = "%Y-%m-%dT00:00:00Z"
 
 
 def get_park_information(
@@ -213,24 +221,39 @@ def generate_human_output(
     info_by_park_id, start_date, end_date, gen_campsite_info=False
 ):
     out = []
+
+    parkStatus = {}
+    try:
+        with open('parks.pickle', 'rb') as handle:
+            parkStatus = pickle.load(handle)
+    except FileNotFoundError:
+        pass
+
     has_availabilities = False
     for park_id, info in info_by_park_id.items():
         current, maximum, available_dates_by_site_id, park_name = info
         if current:
-            emoji = Emoji.SUCCESS.value
-            has_availabilities = True
+            outString = "{} {} : {} site(s) available out of {} site(s)".format(
+                park_name, "{}{}{}".format(BASE_URL, WEB_PREFIX, park_id), current, maximum)
+            try:
+                if parkStatus[park_id] == outString:
+                    emoji = Emoji.FAILURE.value
+                    outString = ""
+                else:
+                    emoji = Emoji.SUCCESS.value
+                    has_availabilities = True
+                    parkStatus[park_id] = outString
+            except KeyError:
+                    emoji = Emoji.SUCCESS.value
+                    has_availabilities = True
+                    parkStatus[park_id] = outString
         else:
             emoji = Emoji.FAILURE.value
+            outString = ""
+            parkStatus[park_id] = ""
 
-        out.append(
-            "{emoji} {park_name} ({park_id}): {current} site(s) available out of {maximum} site(s)".format(
-                emoji=emoji,
-                park_name=park_name,
-                park_id=park_id,
-                current=current,
-                maximum=maximum,
-            )
-        )
+        if emoji != Emoji.FAILURE.value:
+            out.append("{} {}".format(emoji, outString))
 
         # Displays campsite ID and availability dates.
         if gen_campsite_info and available_dates_by_site_id:
@@ -257,8 +280,11 @@ def generate_human_output(
         )
     else:
         out.insert(0, "There are no campsites available :(")
-    return "\n".join(out), has_availabilities
 
+    with open('parks.pickle', 'wb') as handle:
+        pickle.dump(parkStatus, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    return "\n".join(out), has_availabilities
 
 def generate_json_output(info_by_park_id):
     availabilities_by_park_id = {}
